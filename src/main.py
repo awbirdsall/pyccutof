@@ -1,3 +1,6 @@
+from readfftstream import readfft
+import numpy as np
+import os
 def readffc(fn):
     ffc_dtype = np.dtype([('protocol', '<i4'),
                           ('time', '<i4'), # multiply by TimeMultiplier to obtain ms
