@@ -1,4 +1,6 @@
-from readfftstream import readfft
+# don't import readfft -- currently not working as "valid Win32"
+# from readfftstream import readfft
+
 import numpy as np
 import os
 import pandas as pd
