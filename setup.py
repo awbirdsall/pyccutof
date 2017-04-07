@@ -39,7 +39,7 @@ setup(
     packages=['pyccutof'],
     install_requires=['matplotlib>=1.5','numpy','scipy'],
     package_data={
-        # any data would go here
+        'pyccutof': ['data/sample.FFC', 'data/sample.FFT']
     },
     include_package_data=True,
     entry_points={
