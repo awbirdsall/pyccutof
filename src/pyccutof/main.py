@@ -173,18 +173,19 @@ def read_fft_lazy(fn, index_recs):
     spectra_list = import_fft(fn, index_recs)
     return np.array([extract_counts_from_spectrum(spectrum) for spectrum in spectra_list])
 
-def read_fft_f2py(fn, numspec, index_recs):
-    # same as above but use `lazy` method to get specbins
-    startbyte = index_recs['offset'][0]+1
-    # kills python kernel if specbins wrong...
-    # pass more than 1 row of index_recs to read_fft_lazy because of bug
-    # with single index_recs
-    specbins = read_fft_lazy(fn, index_recs[:2]).shape[1]
-    specbytes = index_recs['offset'][1]-index_recs['offset'][0] + 1 # plus 1 for luck
-    # f2py-compiled call:
-    spectra = readfft(numspec, fn, startbyte, specbins, specbytes)
-    # just return slice of output for purpose of comparison
-    return spectra[:,:,1]
+# disabled until figure out correct packaging of fortran-based readfft
+# def read_fft_f2py(fn, numspec, index_recs):
+#     # same as above but use `lazy` method to get specbins
+#     startbyte = index_recs['offset'][0]+1
+#     # kills python kernel if specbins wrong...
+#     # pass more than 1 row of index_recs to read_fft_lazy because of bug
+#     # with single index_recs
+#     specbins = read_fft_lazy(fn, index_recs[:2]).shape[1]
+#     specbytes = index_recs['offset'][1]-index_recs['offset'][0] + 1 # plus 1 for luck
+#     # f2py-compiled call:
+#     spectra = readfft(numspec, fn, startbyte, specbins, specbytes)
+#     # just return slice of output for purpose of comparison
+#     return spectra[:,:,1]
 
 def read_jeoldx(fn):
     '''read jeol-dx `.jmc` file as pandas dataframe.'''
