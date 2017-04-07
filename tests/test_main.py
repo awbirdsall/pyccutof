@@ -1,8 +1,5 @@
-from __future__ import division
 import pytest
 import pyccutof as ptof
-from pkg_resources import resource_filename
-from copy import deepcopy
 import numpy as np
 
 def test_upconvert_uint32_correct_calc():
