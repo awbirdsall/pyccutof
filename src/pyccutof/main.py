@@ -107,9 +107,12 @@ def extract_counts_from_spectrum(word_list):
         raise ParserError("Tags at starts of frames not as required for lazy parsing.")
     
     # external address values should match with expectation of no skipped bins
-    framelengths = ibits(word_list[frame_header_idxs], 0, 14)
-    # calculate number of data points by assuming each word in frame, other than
-    # those accounted for above, is a data point
+    # calculate number of data points by assuming each word in frame, other
+    # than those accounted for above, is a data point. Count length of frames
+    # using locations of 0xffffff as references
+    framelengths = np.zeros_like(frame_start_idxs)
+    framelengths[:-1] = frame_start_idxs[1:]-frame_start_idxs[:-1]
+    framelengths[-1] = len(word_list) - frame_start_idxs[-1]
     numdata = framelengths - 5
     numdata[0] = numdata[0] - 1 # timestamp/protocol word in first frame
     ea_expected_values = np.roll(numdata.cumsum(), 1)
@@ -120,6 +123,25 @@ def extract_counts_from_spectrum(word_list):
     ea_actual_values = word_list[ea_value_idxs]
     if not(np.array_equal(ea_expected_values, ea_actual_values)):
         raise ParserError("Extended address values inconsistent with no skipped bins.")
+
+    # check agreement between frame header lengths and actual frame lengths
+    fh_lengths = ibits(word_list[frame_header_idxs], 0, 14)
+    if not np.array_equal(fh_lengths, framelengths):
+        raise ParserError("Frame header frame length inconsistent with actual "
+                          "number of words in frame")
+
+    # check frame header spectrum positions are correct
+    fh_pos = ibits(word_list[frame_header_idxs], 14, 2)
+    if len(fh_pos)>1:
+        first_correct = (fh_pos[0] == 0b01)
+        mid_correct = (np.all(fh_pos[1:-1] == 0b00))
+        last_correct = (fh_pos[-1] == 0b10)
+        fh_correct = first_correct and mid_correct and last_correct
+    else: # single frame header means single-frame spectrum
+        fh_correct = (fh_pos[0] == 0b11)
+    if not fh_correct:
+        raise ParserError("Frame header spectrum positions are incorrect. Bad "
+                          "input or problem with parsing.")
 
     # use Boolean mask to strip all non-data values
     mask = np.ones(word_list.shape, dtype=bool)
