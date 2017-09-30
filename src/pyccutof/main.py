@@ -6,24 +6,48 @@ import os
 import pandas as pd
 
 def readffc(fn):
+    '''Read an FFC file from the filename.
+
+    The FFC record starts with a 4-byte header, and then continues with index
+    records providing information about each spectrum in the corresponding FFT
+    file.
+
+    Parameters
+    ----------
+    fn : str
+    Filename of FFC file to read.
+
+    Returns
+    -------
+    header : bytes
+    4-byte header of FFC, "NumberOfPoints"
+    index_records : numpy.recarray
+    recarray of spectra in corresponding FFT file, with field names 'protocol',
+    'time', 'reserved', 'counts', 'offset', and 'timemultiplier'.
+
+    '''
     ffc_dtype = np.dtype([('protocol', '<i4'),
-                          ('time', '<i4'), # multiply by TimeMultiplier to obtain ms
-                          ('reserved', '<i4'), # number bytes in record for TOF spectrum
-                          ('counts', '<i8'), # total ion counts above background in spectrum
-                          ('offset', '<i8'), # starting location of spectrum in FFT file
-                          ('timemultiplier', '<i8'),]) # 2.5 with dsp; 5.0 without (so 2.5)
+                          ('time', '<i4'), # in units of "TimeMultiplier"
+                          ('reserved', '<i4'), # number bytes
+                          ('counts', '<i8'), # total ion counts above background
+                          ('offset', '<i8'), # starting location byte in fft
+                          ('timemultiplier', '<i8'),]) # 2.5 with dsp installed
+                                                       # 5.0 without dsp
     with open(fn, 'rb') as f:
         header = f.read(4) # numberofpoints
         index_records = np.fromfile(f, dtype=ffc_dtype)
     return header, index_records
 
 class ParserError(Exception):
-    # Raise exception when parser didn't work correctly
+    '''Raise exception when parser didn't work correctly.'''
     pass
 
 def ibits(i, pos, l):
-    # convenience bitwise function: extract l bits of i, starting from pos.
-    # like fortran ibits
+    '''Extract l bits of i, starting from pos.
+
+    Convenience function, like fortran `ibits`.
+
+    '''
     return (i>>pos)&~(-1<<l)
 
 def upconvert_uint32(raw_bytes, num_bytes):
@@ -64,7 +88,7 @@ def extract_counts_from_spectrum(word_list):
     Return array includes first bin (timestamp) and last two bins (total ion
     count) of spectrum, even though they don't correspond to "real" ion counts.
     
-    Brittle assumptions about structure of frames in spectrum (hex words):
+    Requires brittle assumptions about structure of frames in spectrum:
     ffffff # start of frame
     ffxxxx # frame header: length + position in spectrum
     xxxxxx # spectrum protocol + timestamp (first frame only)
@@ -83,28 +107,32 @@ def extract_counts_from_spectrum(word_list):
     above background, where peaks and background are determined by the digital
     signal processor, regardless of whether data compression is on or off.
     '''
-    # FIXME what if there are a different number of frames per spectrum? (expected
-    # if mass range differs)
-    # TODO check consistency of all descriptions
-    
-    # check assumptions about structure
-    # (use flatnonzero rather than where for ease of math)
+    # check assumptions about location of frame header, external address, and
+    # single data tag (see docstring)
+
+    # start with indices of 0xffffff frame start words
     frame_start_idxs = np.flatnonzero(word_list==0xffffff) 
-    # all frames should have frame header as second word
+    # all frames should have frame header as second word, which starts with ff
     frame_header_idxs = frame_start_idxs + 1
-    frame_header_expected = (ibits(word_list[frame_header_idxs], 16, 8) == 0xff).all()
-    # all frames should have external address tag as third word
+    frame_header_high_byte = ibits(word_list[frame_header_idxs], 16, 8)
+    frame_header_correct = (frame_header_high_byte == 0xff).all()
+
+    # all frames should have external address tag as third word (fourth for
+    # first frame, which containes timestamp as third word)
     ea_tag_idxs = frame_start_idxs + 2
-    # index is one larger for first frame since it includes timestamp as third word.
     ea_tag_idxs[0] = ea_tag_idxs[0] + 1
-    ea_tag_expected = (word_list[ea_tag_idxs] == 0xff8000).all()
-    # all frames should have data tag of 0xff0000 as fifth word (sixth for first frame)
+    ea_tag_correct = (word_list[ea_tag_idxs] == 0xff8000).all()
+
+    # all frames should have data tag 0xff0000 as fifth word (sixth for first
+    # frame)
     data_tag_idxs = frame_start_idxs + 4
-    # index is one larger for first frame since it includes timestamp as third word.
+    # index is one larger for first frame since it includes timestamp as third
+    # word.
     data_tag_idxs[0] = data_tag_idxs[0] + 1
-    data_tag_expected = (word_list[data_tag_idxs] == 0xff0000).all()
-    if not(frame_header_expected and ea_tag_expected and data_tag_expected):
-        raise ParserError("Tags at starts of frames not as required for lazy parsing.")
+    data_tag_correct = (word_list[data_tag_idxs] == 0xff0000).all()
+    if not(frame_header_correct and ea_tag_correct and data_tag_correct):
+        raise ParserError("Incorrect order of words at starts of frames for "
+                          "use of extract_counts_from_spectrum")
     
     # external address values should match with expectation of no skipped bins
     # calculate number of data points by assuming each word in frame, other
@@ -122,7 +150,8 @@ def extract_counts_from_spectrum(word_list):
     ea_value_idxs[0] = ea_value_idxs[0] + 1
     ea_actual_values = word_list[ea_value_idxs]
     if not(np.array_equal(ea_expected_values, ea_actual_values)):
-        raise ParserError("Extended address values inconsistent with no skipped bins.")
+        raise ParserError("Extended address values are inconsistent with no "
+                          "skipped bins.")
 
     # check agreement between frame header lengths and actual frame lengths
     fh_lengths = ibits(word_list[frame_header_idxs], 0, 14)
@@ -143,6 +172,7 @@ def extract_counts_from_spectrum(word_list):
         raise ParserError("Frame header spectrum positions are incorrect. Bad "
                           "input or problem with parsing.")
 
+    # finally ready to prepare output data_words!
     # use Boolean mask to strip all non-data values
     mask = np.ones(word_list.shape, dtype=bool)
     mask[frame_start_idxs] = False
@@ -150,6 +180,9 @@ def extract_counts_from_spectrum(word_list):
     mask[ea_tag_idxs] = False
     mask[ea_value_idxs] = False
     mask[data_tag_idxs] = False
+    # stripping out timestamp_protocol in header region, but note that first
+    # "data" point in spectrum also appears to have the timestamp value, so
+    # timestamp is still included in what is returned
     timestamp_protocol = 2
     mask[timestamp_protocol] = False
     data_words = word_list[mask]
@@ -165,11 +198,10 @@ def import_fft(fn, index_recs):
     
     Requires filename and list of offsets (from FFC file).
     
-    Assume the spectrum lasts until the start of the
-    following spectrum. This allows for gulping up the spectrum at once
-    but relies on there not being
-    any cruft between spectra. Also requires stripping off 
-    partial final spectrum from last full spectrum.
+    Assume the spectrum lasts until the start of the following spectrum. This
+    allows for gulping up the spectrum at once but relies on there not being
+    any cruft between spectra. Also requires stripping off partial final
+    spectrum from last full spectrum.
     '''
     if index_recs.shape[0] == 1:
         raise ValueError("import_fft cannot handle single-row index_recs.")
@@ -183,21 +215,21 @@ def import_fft(fn, index_recs):
 
             if i+1<index_recs['offset'].size:
                 spectrum_size = index_recs['offset'][i+1]-offset
-#             else:
-                # for now, assume we can use penultimate spectrum_size for final spectrum
-                # This breaks import_fft when index_recs only has 1 row.
-                # TODO: better way?
-                # final spectrum grabs the rest (including possible fragment):
-#                                 spectrum_size = -1
-                # TODO: fix that if only pass portion of index_recs, "final" spectrum
-                # isn't final, will grab *entire* rest of file, which could be huge
-                # this code leads to only grabbing the first frame
-#                 first_two_words = np.fromfile(f, dtype=np.uint8, spectrum_size = 6)
+            else:
+                spectrum_size = spectrum_size
+                # For now, use penultimate spectrum_size for final spectrum.
+                # This is better than grabbing the rest of the file as the
+                # "final" spectrum.  However, this means import_fft cannot be
+                # used when index_recs only has 1 row. TODO: better way?
+                # this code leads to only grabbing the first frame:
+#                 first_two_words = np.fromfile(f, dtype=np.uint8, count=6)
 #                 fh = upconvert_uint32(first_two_words[3:], 3)[0] # frame header
 #                 framelength = ibits(fh, 0, 14) # number of entries
 #                 spectrum_size = framelength*3
 #                 # return to start of first frame of final spectrum
 #                 f.seek(offset, os.SEEK_SET)
+                # would need to repeat this for *all* frames until reaching the
+                # last frame of the spectrum
             spectrum_raw = np.fromfile(f, dtype=np.uint8, count=spectrum_size)
             # strip off incomplete byte at end, if any
             if spectrum_raw.size%3 != 0:
@@ -231,6 +263,8 @@ def read_fft_lazy(fn, index_recs):
 #     return spectra[:,:,1]
 
 def read_jeoldx(fn):
-    '''read jeol-dx `.jmc` file as pandas dataframe.'''
-    df = pd.read_csv(fn, sep='\t', comment='#', names=['time', 'signal'], index_col='time')
+    '''Read jeol-dx `.jmc` file as pandas DataFrame.
+    '''
+    df = pd.read_csv(fn, sep='\t', comment='#', names=['time', 'signal'],
+                     index_col='time')
     return df
