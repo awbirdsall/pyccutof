@@ -25,3 +25,39 @@ def test_readffc_returns_value(ffc):
 def test_import_fft_returns_value(ffc):
     fn = resource_filename('pyccutof', 'data/sample.FFT')
     assert ptof.import_fft(fn, ffc[1])
+
+def test_extract_counts_parses_uncompressed_spectrum_correctly():
+    # modify sample compressed spectrum from Fastflight manual, appendix d, so
+    # that it is uncompressed and follows assumptions of
+    # extract_counts_from_spectrum.
+    uncompressed_spectrum = np.array([0xffffff, 0xff400f, 0x000010, 0xff8000,
+                                      0x000000, 0xff0000, 0x000050, 0x000054,
+                                      0x000045, 0x000060, 0x000050, 0x000050,
+                                      0x000070, 0x000500, 0x000800, 0xffffff,
+                                      0xff8018, 0xff8000, 0x000009, 0xff0000,
+                                      0x000485, 0x000120, 0x000045, 0x000050,
+                                      0x000070, 0x000500, 0x000800, 0x000485,
+                                      0x000120, 0x000045, 0x000054, 0x000045,
+                                      0x000060, 0x000050, 0x000054, 0x000045,
+                                      0x000060, 0x003052, 0x000000])
+    output = np.array([0x50, 0x54, 0x45, 0x60,
+                       0x50, 0x50, 0x70, 0x500,
+                       0x800, 0x485, 0x120, 0x45,
+                       0x50, 0x70, 0x500, 0x800,
+                       0x485, 0x120, 0x45, 0x54,
+                       0x45, 0x60, 0x50, 0x54,
+                       0x45, 0x60, 0x3052, 0x0])
+    extracted = ptof.extract_counts_from_spectrum(uncompressed_spectrum)
+    assert np.array_equal(extracted, output)
+
+def test_extract_counts_catches_extended_address_gap():
+    # check error is raised if the data is not in contiguous bins because the
+    # extended address values don't line up properly
+    ea_gap_spectrum = np.array([0xffffff, 0xff4007, 0x000010, 0xff8000,
+                                0x000000, 0xff0000,
+                                0x000050, # single data value in first frame
+                                0xffffff, 0xff8008, 0xff8000,
+                                0x000002, # second frame starts in bin *2*
+                                0xff0000, 0x000485, 0x003052, 0x000000])
+    with pytest.raises(ptof.ParserError):
+        ptof.extract_counts_from_spectrum(ea_gap_spectrum)
