@@ -61,12 +61,31 @@ def extract_data_record(word):
 def extract_counts_from_spectrum(word_list):
     '''Use boolean mask to extract counts from spectrum.
     
-    Includes first bin (timestamp) and last two bins (total ion counts),
-    even though they don't correspond to "real" ion count bins.
+    Return array includes first bin (timestamp) and last two bins (total ion
+    count) of spectrum, even though they don't correspond to "real" ion counts.
     
-    Pretty brittle in terms of assumptions about structure of frames.'''
+    Brittle assumptions about structure of frames in spectrum (hex words):
+    ffffff # start of frame
+    ffxxxx # frame header: length + position in spectrum
+    xxxxxx # spectrum protocol + timestamp (first frame only)
+    ff8000 # extended address tag
+    xxxxxx # extended address value
+    ff0000 # data tag offset of 0 from extended address
+    xxxxxx # first data value
+    ...... # continuation of contiguous data (no ffxxxx words skipping bins)
+    xxxxxx # last data value
+    xxxxxx # total ion sum, low word (last frame only)
+    xxxxxx # total ion sum, high word (last frame only)
+
+    NB: The "total ion sum" will not equal the sum of the raw data values
+    in the spectrum. According to the FastFlight manual (Sect. 3.15 "Data
+    Compression"), the total ion count is calculated using the net peak area
+    above background, where peaks and background are determined by the digital
+    signal processor, regardless of whether data compression is on or off.
+    '''
     # FIXME what if there are a different number of frames per spectrum? (expected
     # if mass range differs)
+    # TODO check consistency of all descriptions
     
     # check assumptions about structure
     # (use flatnonzero rather than where for ease of math)
@@ -110,9 +129,9 @@ def extract_counts_from_spectrum(word_list):
     mask[ea_value_idxs] = False
     mask[data_tag_idxs] = False
     timestamp_protocol = 2
-    mask[timestamp_protocol] = False    
+    mask[timestamp_protocol] = False
     data_words = word_list[mask]
-    
+
     # no more tagged words (0xff####) should be present in data_words
     if (ibits(data_words, 16, 8)==0xff).any():
         raise ParserError("Unexpected tagged words in spectrum.")
