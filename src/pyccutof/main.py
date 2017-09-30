@@ -28,7 +28,9 @@ def ibits(i, pos, l):
 
 def upconvert_uint32(raw_bytes, num_bytes):
     num_words = raw_bytes.size/num_bytes
-    four_bytes = np.zeros((num_words, 4), dtype=np.uint8)
+    if num_words != int(num_words):
+        ValueError("raw bytes are not evenly divisible into native num_bytes")
+    four_bytes = np.zeros((int(num_words), 4), dtype=np.uint8)
     four_bytes[:, :num_bytes] = raw_bytes.reshape(-1, 3)
     words = four_bytes.view('uint32').reshape(four_bytes.shape[:-1])
     return words
