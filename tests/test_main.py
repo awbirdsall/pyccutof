@@ -5,7 +5,12 @@ from pkg_resources import resource_filename
 
 @pytest.fixture(scope='module')
 def ffc():
-    fn = resource_filename('pyccutof', 'data/sample.FFC')
+    fn = resource_filename('pyccutof', 'data/sample_tenspec.FFC')
+    return ptof.readffc(fn)
+
+@pytest.fixture(scope='module')
+def ffc_onespec():
+    fn = resource_filename('pyccutof', 'data/sample_onespec.FFC')
     return ptof.readffc(fn)
 
 def test_upconvert_uint32_catches_size_mismatch():
@@ -23,7 +28,7 @@ def test_readffc_returns_value(ffc):
     assert ffc
 
 def test_import_fft_returns_value(ffc):
-    fn = resource_filename('pyccutof', 'data/sample.FFT')
+    fn = resource_filename('pyccutof', 'data/sample_tenspec.FFT')
     assert ptof.import_fft(fn, ffc[1])
 
 def test_extract_counts_parses_uncompressed_spectrum_correctly():
@@ -98,3 +103,10 @@ def test_extract_count_catches_incorrect_frame_headers():
                                        0x000000])
     with pytest.raises(ptof.ParserError):
         ptof.extract_counts_from_spectrum(wrong_fh_bits_spectrum)
+
+def test_import_fft_extract_counts_single_index_recs_row(ffc_onespec):
+    # check for unexpected failure of single-spectrum data import
+    fn = resource_filename('pyccutof', 'data/sample_onespec.FFT')
+    fft_onespec = ptof.import_fft(fn, ffc_onespec[1])
+    onespec = ptof.extract_counts_from_spectrum(fft_onespec[0])
+    assert onespec.size == 13891

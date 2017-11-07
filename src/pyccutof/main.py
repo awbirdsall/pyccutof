@@ -19,8 +19,8 @@ def readffc(fn):
 
     Returns
     -------
-    header : bytes
-    4-byte header of FFC, "NumberOfPoints"
+    numpts : int
+    Header of FFC, "NumberOfPoints", converted to int.
     index_records : numpy.recarray
     recarray of spectra in corresponding FFT file, with field names 'protocol',
     'time', 'reserved', 'counts', 'offset', and 'timemultiplier'.
@@ -34,9 +34,10 @@ def readffc(fn):
                           ('timemultiplier', '<i8'),]) # 2.5 with dsp installed
                                                        # 5.0 without dsp
     with open(fn, 'rb') as f:
-        header = f.read(4) # numberofpoints
+        header = f.read(4)
         index_records = np.fromfile(f, dtype=ffc_dtype)
-    return header, index_records
+    numpts = int(np.array([header]).view("int32"))
+    return numpts, index_records
 
 class ParserError(Exception):
     '''Raise exception when parser didn't work correctly.'''
@@ -82,11 +83,14 @@ def extract_data_record(word):
     return value
 
 # for lazy way
-def extract_counts_from_spectrum(word_list):
+def extract_counts_from_spectrum(word_list, clean_after_end=True):
     '''Use boolean mask to extract counts from spectrum.
     
     Return array includes first bin (timestamp) and last two bins (total ion
     count) of spectrum, even though they don't correspond to "real" ion counts.
+    If the word list extends past a frame flagged as the last frame in
+    a spectrum (as seen for first entry in a sample FFC), strip off all further
+    words if `clean_after_end`.
     
     Requires brittle assumptions about structure of frames in spectrum:
     ffffff # start of frame
@@ -111,11 +115,40 @@ def extract_counts_from_spectrum(word_list):
     # single data tag (see docstring)
 
     # start with indices of 0xffffff frame start words
-    frame_start_idxs = np.flatnonzero(word_list==0xffffff) 
+    frame_start_idxs = np.flatnonzero(word_list==0xffffff)
     # all frames should have frame header as second word, which starts with ff
     frame_header_idxs = frame_start_idxs + 1
     frame_header_high_byte = ibits(word_list[frame_header_idxs], 16, 8)
     frame_header_correct = (frame_header_high_byte == 0xff).all()
+    if not(frame_header_correct):
+        raise ParserError("Incorrect value for frame header high bytes (0xff)")
+
+    # strip values after first "final" frame, if clean_after_end
+    # otherwise, if there are extra values, will throw ParserError below
+    if clean_after_end:
+        last_frames = ibits(word_list[frame_header_idxs], 15, 1) == 1
+        first_last = frame_header_idxs[last_frames][0]
+        # extract number of words in this last frame
+        last_words = ibits(word_list[first_last], 0, 14)
+        # strip off word_list after this frame
+        word_list = word_list[:first_last+last_words-1]
+
+        # recalculate values derived above
+        frame_start_idxs = np.flatnonzero(word_list==0xffffff) 
+        frame_header_idxs = frame_start_idxs + 1
+
+    # check frame header spectrum positions are correct
+    fh_pos = ibits(word_list[frame_header_idxs], 14, 2)
+    if len(fh_pos)>1:
+        first_correct = (fh_pos[0] == 0b01)
+        mid_correct = (np.all(fh_pos[1:-1] == 0b00))
+        last_correct = (fh_pos[-1] == 0b10)
+        fh_correct = first_correct and mid_correct and last_correct
+    else: # single frame header means single-frame spectrum
+        fh_correct = (fh_pos[0] == 0b11)
+    if not fh_correct:
+        raise ParserError("Frame header spectrum positions are incorrect. Bad "
+                          "input or problem with parsing.")
 
     # all frames should have external address tag as third word (fourth for
     # first frame, which containes timestamp as third word)
@@ -130,9 +163,9 @@ def extract_counts_from_spectrum(word_list):
     # word.
     data_tag_idxs[0] = data_tag_idxs[0] + 1
     data_tag_correct = (word_list[data_tag_idxs] == 0xff0000).all()
-    if not(frame_header_correct and ea_tag_correct and data_tag_correct):
-        raise ParserError("Incorrect order of words at starts of frames for "
-                          "use of extract_counts_from_spectrum")
+    if not(ea_tag_correct and data_tag_correct):
+        raise ParserError("Unallowed external address or data tag values for "
+                          "extract_counts_from_spectrum")
     
     # external address values should match with expectation of no skipped bins
     # calculate number of data points by assuming each word in frame, other
@@ -159,19 +192,6 @@ def extract_counts_from_spectrum(word_list):
         raise ParserError("Frame header frame length inconsistent with actual "
                           "number of words in frame")
 
-    # check frame header spectrum positions are correct
-    fh_pos = ibits(word_list[frame_header_idxs], 14, 2)
-    if len(fh_pos)>1:
-        first_correct = (fh_pos[0] == 0b01)
-        mid_correct = (np.all(fh_pos[1:-1] == 0b00))
-        last_correct = (fh_pos[-1] == 0b10)
-        fh_correct = first_correct and mid_correct and last_correct
-    else: # single frame header means single-frame spectrum
-        fh_correct = (fh_pos[0] == 0b11)
-    if not fh_correct:
-        raise ParserError("Frame header spectrum positions are incorrect. Bad "
-                          "input or problem with parsing.")
-
     # finally ready to prepare output data_words!
     # use Boolean mask to strip all non-data values
     mask = np.ones(word_list.shape, dtype=bool)
@@ -194,59 +214,38 @@ def extract_counts_from_spectrum(word_list):
     return data_words
 
 def import_fft(fn, index_recs):
-    '''Read FFT file and return list of spectra.
+    '''Read FFT file and return list of spectra, each containing raw words.
     
     Requires filename and list of offsets (from FFC file).
     
-    Assume the spectrum lasts until the start of the following spectrum. This
-    allows for gulping up the spectrum at once but relies on there not being
-    any cruft between spectra. Also requires stripping off partial final
-    spectrum from last full spectrum.
+    Assume the spectrum lasts for the length of the corresponding 'reserved'
+    value in the FFC. Sample data shows that the 'reserved' value is usually
+    okay, except it's too big for the first entry. Don't clean up issues like
+    this here; instead, use `extract_counts_from_spectrum()`.
     '''
-    if index_recs.shape[0] == 1:
-        raise ValueError("import_fft cannot handle single-row index_recs.")
     with open(fn, 'rb') as f:
         # load all spectra into memory
         # timestamp_list = []
         spectra_list = []
-        for i, offset in enumerate(index_recs['offset']):
-            # go to start of spectrum
+        for reserved, offset in zip(index_recs['reserved'],
+                                    index_recs['offset']):
             f.seek(offset, os.SEEK_SET)
-
-            if i+1<index_recs['offset'].size:
-                spectrum_size = index_recs['offset'][i+1]-offset
-            else:
-                spectrum_size = spectrum_size
-                # For now, use penultimate spectrum_size for final spectrum.
-                # This is better than grabbing the rest of the file as the
-                # "final" spectrum.  However, this means import_fft cannot be
-                # used when index_recs only has 1 row. TODO: better way?
-                # this code leads to only grabbing the first frame:
-#                 first_two_words = np.fromfile(f, dtype=np.uint8, count=6)
-#                 fh = upconvert_uint32(first_two_words[3:], 3)[0] # frame header
-#                 framelength = ibits(fh, 0, 14) # number of entries
-#                 spectrum_size = framelength*3
-#                 # return to start of first frame of final spectrum
-#                 f.seek(offset, os.SEEK_SET)
-                # would need to repeat this for *all* frames until reaching the
-                # last frame of the spectrum
-            spectrum_raw = np.fromfile(f, dtype=np.uint8, count=spectrum_size)
-            # strip off incomplete byte at end, if any
+            spectrum_raw = np.fromfile(f, dtype=np.uint8, count=reserved)
+            if spectrum_raw.size == 0:
+                raise ValueError("no spectrum in {} at offset {}"
+                                 .format(f, offset))
+            # silently strip off incomplete byte at end, if any
             if spectrum_raw.size%3 != 0:
                 spectrum_raw = spectrum_raw[:-(spectrum_raw.size%3)]
             spectrum = upconvert_uint32(spectrum_raw, 3)
             spectrum_timestamp = ibits(spectrum[2], 0, 21)
             #timestamp_list.append(spectrum_timestamp)
             spectra_list.append(spectrum)
-    # strip any trailing spectrum fragment from last spectra
-    # (might happen if collection terminated manually)
-    if spectra_list[-1].size != spectra_list[0].size:
-        spectra_list[-1] = spectra_list[-1][:spectra_list[0].size]
     return spectra_list
 
 def read_fft_lazy(fn, index_recs):
     spectra_list = import_fft(fn, index_recs)
-    return np.array([extract_counts_from_spectrum(spectrum) for spectrum in spectra_list])
+    return np.array([extract_counts_from_spectrum(s) for s in spectra_list])
 
 # disabled until figure out correct packaging of fortran-based readfft
 # def read_fft_f2py(fn, numspec, index_recs):
