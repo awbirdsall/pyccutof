@@ -1,9 +1,13 @@
-# don't import readfft -- currently not working as "valid Win32"
-# from readfftstream import readfft
-
+import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pandas as pd
+import pyodbc
+import scipy.integrate as spi
+import scipy.signal as sps
+
+# don't import readfft -- currently not working as "valid Win32"
+# from readfftstream import readfft
 
 def readffc(fn):
     '''Read an FFC file from the filename.
@@ -210,14 +214,14 @@ def extract_counts_from_spectrum(word_list, clean_after_end=True):
     # no more tagged words (0xff####) should be present in data_words
     if (ibits(data_words, 16, 8)==0xff).any():
         raise ParserError("Unexpected tagged words in spectrum.")
-        
+
     return data_words
 
 def import_fft(fn, index_recs):
     '''Read FFT file and return list of spectra, each containing raw words.
-    
+
     Requires filename and list of offsets (from FFC file).
-    
+
     Assume the spectrum lasts for the length of the corresponding 'reserved'
     value in the FFC. Sample data shows that the 'reserved' value is usually
     okay, except it's too big for the first entry. Don't clean up issues like
@@ -267,3 +271,272 @@ def read_jeoldx(fn):
     df = pd.read_csv(fn, sep='\t', comment='#', names=['time', 'signal'],
                      index_col='time')
     return df
+
+def readmassrange(acqfn):
+    '''Fetch StartMass and EndMass from acquisition data database file.
+    '''
+    cnxn = pyodbc.connect("Driver={{Microsoft Access Driver "
+                          "(*.mdb)}};Dbq={};Uid=;Pwd=;".format(acqfn))
+    cursor = cnxn.cursor()
+    cursor.execute("SELECT StartMass FROM T_AcquisitionSettingTOFCollection")
+    start = cursor.fetchone().StartMass
+    cursor.execute("SELECT EndMass FROM T_AcquisitionSettingTOFCollection")
+    end = cursor.fetchone().EndMass
+    cnxn.close()
+    return start, end
+
+def readana(anafn):
+    with open(anafn, 'rb') as f:
+        f.seek(4, os.SEEK_SET) # seek past header
+        data_raw = np.fromfile(f, dtype=np.uint8, count=-1).reshape((-1,14))
+    time_bytes = data_raw[:,:6]
+    data_bytes = data_raw[:,6:]
+    times = upconvert_uint64(time_bytes, 6)
+    # hacky conversion factor
+    conv_slope = 500./0xffffffffffffffff
+    conv_offset = -124
+    data = upconvert_uint64(data_bytes, 8)*conv_slope+conv_offset
+    return np.vstack([times, data])
+
+def protocol_info(fftfn):
+    # TODO -- see fastflight manual
+    with open(fftfn, 'rb') as f:
+        protocol_raw = np.fromfile(f, dtype=np.uint4, count=96)
+    return protocol_raw
+
+# cannot use this as written without working readfft
+# def processdatafolder(fldr):
+#     # mass spectra in FFT and FFC
+#     fftfn = os.path.join(fldr, "MsData.FFT")
+#     ffcfn = os.path.join(fldr, "MsData.FFC")
+#     ffc = readffc(ffcfn)
+#     fft = readfft(fftfn, ffc)
+#     # analog signals
+#     ana = [None, None]
+#     for i in [1,2]:
+#         anafn = "Analog"+str(i)+".7an"
+#         anapth = os.path.join(fldr, anafn)
+#         if os.path.isfile(anapth):
+#             ana[i-1] = readana("Analog1.7an")
+#     # mass range
+#     acqfn = os.path.join(fldr, "AcquisitionData.7dd")
+#     massrange = readmassrange(acqfn)
+#     return ffc, fft, ana, massrange
+
+def create_cal_poly(cal_times, cal_mz, deg=4):
+    '''Create a calibration polynomial from fitting times to known m/z.
+    '''
+    cal_poly = np.poly1d(np.polyfit(cal_times, cal_mz, deg))
+    return cal_poly
+
+def apply_mz_cal(fft, cal_poly):
+    '''Given fft array and calibration polynomial, create array of m/z values.
+
+    This means every bin of counts in the fft is given a corresponding m/z.
+    '''
+    # all fft entries in each row are time bins, except first one and last two
+    num_fft_time_bins = fft[:,1:-2].shape[1]
+    time_bins = np.arange(1,num_fft_time_bins+1,step=1)
+    mz_values = cal_poly(time_bins)
+    return mz_values
+
+def extract_tic(fft):
+    '''Create dataframe of total ion chromatogram from fft.
+    '''
+    chrom_time = fft[:,0]*2.5e-3 # fft times are in units of 2.5 ms
+    tic = fft[:,-2] # penultimate entry in each spectrum is total ion count
+    # (caution: if tic very large, overflows into last entry. TODO: check for
+    # this.)
+    df_tic = pd.DataFrame({'chrom_time':chrom_time, 'tic':tic}).set_index('chrom_time')
+    return df_tic
+
+def create_df_specs(fft, mz):
+    '''Create DataFrame of all spectra in fft, with shared m/z index.
+
+    Assumes fft array is in the format passed from read_fft_lazy(), in which
+    each row contains the timestamp in the first entry, the total ion count in
+    the last two entries, and the mass spectrum in between.
+
+    Array of m/z values can be constructed using apply_mz_cal().
+
+    Parameters
+    ----------
+    fft : 2D numpy array
+    Array of FastFlight data, as output from read_fft_lazy.
+    mz : 1D numpy array
+    Array of m/z values corresponding to intensities in each fft spectrum.
+
+    Returns
+    -------
+    df : pd.DataFrame
+    DataFrame in which each row is a single m/z (m/z value is index), and each
+    column is a different chromatogram time (time is column name).
+    '''
+    # in fft, timestamps are given in units of 2.5 ms
+    timestamps = fft[:,0]*2.5e-3
+    specs = fft[:,1:-2]
+    data_dict = {timestamp: spec for timestamp,spec in zip(timestamps,specs)}
+    data_dict.update({'mz': mz})
+    df = pd.DataFrame(data_dict).set_index('mz')
+    return df
+
+def extract_eic(spec_df, mz_min, mz_max):
+    '''Calculate extracted ion chromatogram over given m/z range.
+
+    Parameters
+    ----------
+    spec_df : pd.DataFrame
+    DataFrame of all spectrum, as output from create_df_specs().
+    mz_min, mz_max : float
+    Values of m/z between which the EIC is limited to.
+
+    Returns
+    -------
+    eic : pd.Series
+    Extracted ion chromatogram, intensities indexed by chromatogram timestamp.
+    '''
+    # assume all mass spectra in spec_array share same m/z index
+    selected_range_mask = (spec_df.index>mz_min) & (spec_df.index<mz_max)
+    eic = spec_df[selected_range_mask].apply(max)
+    return eic
+
+def detect_peak_heights(eic, num_peaks=1, make_plot=True):
+    '''Find a given number of largest peaks in a chromatogram.
+
+    Parameters
+    ----------
+    eic : pd.Series
+    Chromatogram of intensities indexed by timestamps, as output by
+    extract_eic().
+    num_peaks : float
+    Number of peaks to extract, starting with largest. Returned peaks are kept
+    in chromatogram order (i.e., largest peak not necessarily returned first).
+    If None, all peaks are returned.
+    make_plot : Boolean
+    Whether to make a diagnostic plot showing the peaks, heights, and bases.
+
+    Returns
+    -------
+    df_heights : pd.DataFrame
+    DataFrame with each entry containing the peak height, along with its
+    timestamp and the left and right bases to which the prominences are
+    measured.
+    '''
+    peak_idxs, _ = sps.find_peaks(eic)
+
+    prominences, leftbase_idxs, rightbase_idxs = sps.peak_prominences(eic, peak_idxs)
+
+    if num_peaks is not None:
+        # only keep num_peaks largest peaks. on use of argpartition, see
+        # https://stackoverflow.com/a/23734295/4280216
+        largest_idxs = np.argpartition(prominences, -num_peaks)[-num_peaks:]
+        prominences = prominences[largest_idxs]
+        leftbase_idxs = leftbase_idxs[largest_idxs]
+        rightbase_idxs = rightbase_idxs[largest_idxs]
+        peak_idxs = peak_idxs[largest_idxs]
+
+    # convert from numpy index to Series index (i.e., timestamps)
+    peak_ts = eic.iloc[peak_idxs].index.values
+    leftbase_ts = eic.iloc[leftbase_idxs].index.values
+    rightbase_ts = eic.iloc[rightbase_idxs].index.values
+
+    if make_plot:
+        peak_values = eic.loc[peak_ts]
+        contour_heights = peak_values - prominences
+
+        plt.plot(eic, label='data')
+        plt.plot(peak_ts, peak_values, "x", label='peaks')
+        plt.plot(leftbase_ts, eic.loc[leftbase_ts], "o",
+                 alpha=0.3, label='leftbases')
+        plt.plot(rightbase_ts, eic.loc[rightbase_ts], "o",
+                 alpha=0.3, label='rightbases')
+        plt.vlines(x=peak_ts, ymin=contour_heights, ymax=peak_values,
+                   label='heights')
+        for height, x, y in zip(prominences, peak_ts, peak_values):
+            plt.annotate("{:.2f}".format(height), xy=(x, y))
+        plt.legend()
+        plt.title("Check of peak heights")
+
+    df_heights = pd.DataFrame({'height': prominences,
+                               'peak_time': peak_ts,
+                               'leftbase_time': leftbase_ts,
+                               'rightbase_time': rightbase_ts})
+    return df_heights
+
+def integrate_area(int_region, bl_function=None, leftedge=None, rightedge=None,
+                  make_plot=True):
+    '''Integrate Series values, with optional baseline and/or index cutoff.
+
+    Parameters
+    ----------
+    int_region : pd.Series
+    Series of intensities, with index values of chromatogram time.
+    bl_function : function
+    Function that returns baseline intensity as a function of chromatogram
+    time. If provided, baseline is subtracted before integration is performed.
+    leftedge, rightedge : float
+    Chromatogram times over which to integrate, if provided, defined as
+    (leftedge, rightedge].
+    make_plot : Boolean
+    Make plot for visual check. Only helpful if baseline and/or edges defined.
+
+    Returns
+    -------
+    integral : float
+    Integral of region.
+
+    Integral is calculated using Scipy implementation of composite trapezoidal
+    rule.
+    '''
+    int_region_original = int_region.copy()
+    if leftedge is not None:
+        int_region = int_region[int_region.index>leftedge]
+    if rightedge is not None:
+        int_region = int_region[int_region.index<=rightedge]
+    if bl_function is not None:
+        int_region = int_region - bl_function(int_region.index.values)
+    integral = spi.trapz(y=int_region, x=int_region.index.values)
+
+    if make_plot:
+        plt.plot(int_region_original, label='original data')
+        max_idx = int_region_original.idxmax()
+        max_coords = (max_idx, int_region_original.loc[max_idx])
+        plt.annotate(s="area: {:.2f}".format(integral), xy=max_coords,
+                 xycoords='data')
+        if bl_function is not None:
+            plt.plot(int_region_original.index,
+                     bl_function(int_region_original.index.values),
+                     label='baseline')
+        if leftedge is not None:
+            plt.plot(leftedge, int_region_original.loc[leftedge], 'o',
+                     label='left edge')
+        if rightedge is not None:
+            plt.plot(rightedge, int_region_original.loc[rightedge], 'o',
+                     label='right edge')
+        plt.title('Check of integration region')
+        plt.legend(loc='center right')
+
+    return integral
+
+def calc_linear_baseline(eic, leftbase, rightbase):
+    '''Given EIC and two indices, extract baseline and start/end times.
+
+    Helpful in going between detect_peak_heights() and integrate_area().
+
+    Parameters
+    ----------
+    eic : pd.Series
+    Extracted ion chromatogram, intensities indexed by timestamp.
+    leftbase, rightbase : float
+    Timestamps of the start and end of the linear baseline.
+
+    Returns
+    -------
+    baseline : function
+    Linear function giving baseline intensity as a function of time.
+    '''
+    x1, y1 = leftbase, eic.loc[leftbase]
+    x2, y2 = rightbase, eic.loc[rightbase]
+    slope = (y2-y1)/(x2-x1)
+    baseline = lambda x: slope*(x-x1) + y1
+    return baseline
