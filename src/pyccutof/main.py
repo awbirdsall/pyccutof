@@ -400,7 +400,7 @@ def extract_eic(spec_df, mz_min, mz_max):
     eic = spec_df[selected_range_mask].apply(max)
     return eic
 
-def detect_peak_heights(eic, num_peaks=1, make_plot=True):
+def detect_peak_heights(eic, num_peaks=1, make_plot=True, ax=None):
     '''Find a given number of largest peaks in a chromatogram.
 
     Parameters
@@ -414,6 +414,8 @@ def detect_peak_heights(eic, num_peaks=1, make_plot=True):
     If None, all peaks are returned.
     make_plot : Boolean
     Whether to make a diagnostic plot showing the peaks, heights, and bases.
+    ax : matplotlib.Axis
+    Axis to plot on. If None, make new axis.
 
     Returns
     -------
@@ -441,21 +443,23 @@ def detect_peak_heights(eic, num_peaks=1, make_plot=True):
     rightbase_ts = eic.iloc[rightbase_idxs].index.values
 
     if make_plot:
+        if ax is None:
+            fig, ax = plt.subplots()
         peak_values = eic.loc[peak_ts]
         contour_heights = peak_values - prominences
 
-        plt.plot(eic, label='data')
-        plt.plot(peak_ts, peak_values, "x", label='peaks')
-        plt.plot(leftbase_ts, eic.loc[leftbase_ts], "o",
+        ax.plot(eic, label='data')
+        ax.plot(peak_ts, peak_values, "x", label='peaks')
+        ax.plot(leftbase_ts, eic.loc[leftbase_ts], "o",
                  alpha=0.3, label='leftbases')
-        plt.plot(rightbase_ts, eic.loc[rightbase_ts], "o",
+        ax.plot(rightbase_ts, eic.loc[rightbase_ts], "o",
                  alpha=0.3, label='rightbases')
-        plt.vlines(x=peak_ts, ymin=contour_heights, ymax=peak_values,
+        ax.vlines(x=peak_ts, ymin=contour_heights, ymax=peak_values,
                    label='heights')
         for height, x, y in zip(prominences, peak_ts, peak_values):
-            plt.annotate("{:.2f}".format(height), xy=(x, y))
-        plt.legend()
-        plt.title("Check of peak heights")
+            ax.annotate("{:.2f}".format(height), xy=(x, y))
+        ax.legend()
+        ax.set_title("Check peak heights")
 
     df_heights = pd.DataFrame({'height': prominences,
                                'peak_time': peak_ts,
@@ -464,7 +468,7 @@ def detect_peak_heights(eic, num_peaks=1, make_plot=True):
     return df_heights
 
 def integrate_area(int_region, bl_function=None, leftedge=None, rightedge=None,
-                  make_plot=True):
+                  make_plot=True, ax=None):
     '''Integrate Series values, with optional baseline and/or index cutoff.
 
     Parameters
@@ -479,6 +483,8 @@ def integrate_area(int_region, bl_function=None, leftedge=None, rightedge=None,
     (leftedge, rightedge].
     make_plot : Boolean
     Make plot for visual check. Only helpful if baseline and/or edges defined.
+    ax : matplotlib.Axis
+    Axis to plot on. If None, create new axis.
 
     Returns
     -------
@@ -498,23 +504,25 @@ def integrate_area(int_region, bl_function=None, leftedge=None, rightedge=None,
     integral = spi.trapz(y=int_region, x=int_region.index.values)
 
     if make_plot:
-        plt.plot(int_region_original, label='original data')
+        if ax is None:
+            fig, ax = plt.subplots()
+        ax.plot(int_region_original, label='original data')
         max_idx = int_region_original.idxmax()
         max_coords = (max_idx, int_region_original.loc[max_idx])
-        plt.annotate(s="area: {:.2f}".format(integral), xy=max_coords,
+        ax.annotate(s="area: {:.2f}".format(integral), xy=max_coords,
                  xycoords='data')
         if bl_function is not None:
-            plt.plot(int_region_original.index,
+            ax.plot(int_region_original.index,
                      bl_function(int_region_original.index.values),
                      label='baseline')
         if leftedge is not None:
-            plt.plot(leftedge, int_region_original.loc[leftedge], 'o',
+            ax.plot(leftedge, int_region_original.loc[leftedge], 'o',
                      label='left edge')
         if rightedge is not None:
-            plt.plot(rightedge, int_region_original.loc[rightedge], 'o',
+            ax.plot(rightedge, int_region_original.loc[rightedge], 'o',
                      label='right edge')
-        plt.title('Check of integration region')
-        plt.legend(loc='center right')
+        ax.set_title('Check integration region')
+        ax.legend(loc='best')
 
     return integral
 
