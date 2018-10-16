@@ -37,7 +37,8 @@ setup(
     keywords=['mass spectometry', 'chemistry'],
     package_dir = {'': 'src'},
     packages=['pyccutof'],
-    install_requires=['matplotlib>=1.5','numpy','pandas','scipy'],
+    install_requires=['matplotlib>=1.5','numpy','pandas','pyodbc',
+                      'scipy>=1.1'],
     package_data={
         'pyccutof': ['data/sample.FFC', 'data/sample.FFT']
     },
