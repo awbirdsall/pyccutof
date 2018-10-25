@@ -512,8 +512,8 @@ def integrate_area(int_region, bl_function=None, leftedge=None, rightedge=None,
         ax.plot(int_region_original, label='original data')
         max_idx = int_region_original.idxmax()
         max_coords = (max_idx, int_region_original.loc[max_idx])
-        ax.annotate(s="area: {:.2f}".format(integral), xy=max_coords,
-                 xycoords='data')
+        ax.annotate("area: {:.2f}".format(integral), xy=max_coords,
+                    xycoords='data')
         if bl_function is not None:
             ax.plot(int_region_original.index,
                      bl_function(int_region_original.index.values),
