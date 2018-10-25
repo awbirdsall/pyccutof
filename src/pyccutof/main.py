@@ -1,3 +1,4 @@
+from itertools import chain
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -218,7 +219,7 @@ def extract_counts_from_spectrum(word_list, clean_after_end=True):
     return data_words
 
 def import_fft(fn, index_recs):
-    '''Read FFT file and return list of spectra, each containing raw words.
+    '''Read FFT file and yield spectra of raw words.
 
     Requires filename and list of offsets (from FFC file).
 
@@ -229,7 +230,6 @@ def import_fft(fn, index_recs):
     '''
     with open(fn, 'rb') as f:
         # load all spectra into memory
-        # timestamp_list = []
         spectra_list = []
         for reserved, offset in zip(index_recs['reserved'],
                                     index_recs['offset']):
@@ -242,14 +242,17 @@ def import_fft(fn, index_recs):
             if spectrum_raw.size%3 != 0:
                 spectrum_raw = spectrum_raw[:-(spectrum_raw.size%3)]
             spectrum = upconvert_uint32(spectrum_raw, 3)
-            spectrum_timestamp = ibits(spectrum[2], 0, 21)
-            #timestamp_list.append(spectrum_timestamp)
-            spectra_list.append(spectrum)
-    return spectra_list
+            yield spectrum
 
 def read_fft_lazy(fn, index_recs):
-    spectra_list = import_fft(fn, index_recs)
-    return np.array([extract_counts_from_spectrum(s) for s in spectra_list])
+    # use two nested generators to avoid extra copies in memory
+    gen_raw = import_fft(fn, index_recs)
+    gen_spectra = (extract_counts_from_spectrum(s) for s in gen_raw)
+    # convert to 1D numpy array (required by fromiter()) using chain
+    spectra_array = np.fromiter(chain.from_iterable(gen_spectra), np.int32)
+    # return to 2D shape
+    spectra_array.shape = index_recs.size, -1
+    return spectra_array
 
 # disabled until figure out correct packaging of fortran-based readfft
 # def read_fft_f2py(fn, numspec, index_recs):
