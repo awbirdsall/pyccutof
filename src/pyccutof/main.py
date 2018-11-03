@@ -397,7 +397,7 @@ def extract_eic(spec_df, mz_min, mz_max):
     '''
     # assume all mass spectra in spec_array share same m/z index
     selected_range_mask = (spec_df.index>mz_min) & (spec_df.index<mz_max)
-    eic = spec_df[selected_range_mask].apply(max)
+    eic = spec_df[selected_range_mask].max(axis=0)
     return eic
 
 def detect_peak_heights(eic, num_peaks=1, make_plot=True, ax=None):
