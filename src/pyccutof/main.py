@@ -389,7 +389,7 @@ def extract_eic(spec_df, mz_min, mz_max):
     Parameters
     ----------
     spec_df : pd.DataFrame
-    DataFrame of all spectrum, as output from create_df_specs().
+    DataFrame of all spectra, as output from create_df_specs().
     mz_min, mz_max : float
     Values of m/z between which the EIC is limited to.
 
