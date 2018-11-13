@@ -20,15 +20,16 @@ def readffc(fn):
     Parameters
     ----------
     fn : str
-    Filename of FFC file to read.
+        Filename of FFC file to read.
 
     Returns
     -------
     numpts : int
-    Header of FFC, "NumberOfPoints", converted to int.
+        Header of FFC, "NumberOfPoints", converted to int.
     index_records : numpy.recarray
-    recarray of spectra in corresponding FFT file, with field names 'protocol',
-    'time', 'reserved', 'counts', 'offset', and 'timemultiplier'.
+        recarray of spectra in corresponding FFT file, with field names
+        'protocol', 'time', 'reserved', 'counts', 'offset', and
+        'timemultiplier'.
 
     '''
     ffc_dtype = np.dtype([('protocol', '<i4'),
@@ -98,17 +99,20 @@ def extract_counts_from_spectrum(word_list, clean_after_end=True):
     words if `clean_after_end`.
     
     Requires brittle assumptions about structure of frames in spectrum:
-    ffffff # start of frame
-    ffxxxx # frame header: length + position in spectrum
-    xxxxxx # spectrum protocol + timestamp (first frame only)
-    ff8000 # extended address tag
-    xxxxxx # extended address value
-    ff0000 # data tag offset of 0 from extended address
-    xxxxxx # first data value
-    ...... # continuation of contiguous data (no ffxxxx words skipping bins)
-    xxxxxx # last data value
-    xxxxxx # total ion sum, low word (last frame only)
-    xxxxxx # total ion sum, high word (last frame only)
+
+    ::
+
+        ffffff # start of frame
+        ffxxxx # frame header: length + position in spectrum
+        xxxxxx # spectrum protocol + timestamp (first frame only)
+        ff8000 # extended address tag
+        xxxxxx # extended address value
+        ff0000 # data tag offset of 0 from extended address
+        xxxxxx # first data value
+        ...... # continuation of contiguous data (no ffxxxx words skipping bins)
+        xxxxxx # last data value
+        xxxxxx # total ion sum, low word (last frame only)
+        xxxxxx # total ion sum, high word (last frame only)
 
     NB: The "total ion sum" will not equal the sum of the raw data values
     in the spectrum. According to the FastFlight manual (Sect. 3.15 "Data
@@ -365,15 +369,15 @@ def create_df_specs(fft, mz):
     Parameters
     ----------
     fft : 2D numpy array
-    Array of FastFlight data, as output from read_fft_lazy.
+        Array of FastFlight data, as output from read_fft_lazy.
     mz : 1D numpy array
-    Array of m/z values corresponding to intensities in each fft spectrum.
+        Array of m/z values corresponding to intensities in each fft spectrum.
 
     Returns
     -------
     df : pd.DataFrame
-    DataFrame in which each row is a single m/z (m/z value is index), and each
-    column is a different chromatogram time (time is column name).
+        DataFrame in which each row is a single m/z (m/z value is index), and
+        each column is a different chromatogram time (time is column name).
     '''
     # in fft, timestamps are given in units of 2.5 ms
     timestamps = fft[:,0]*2.5e-3
@@ -389,14 +393,15 @@ def extract_eic(spec_df, mz_min, mz_max):
     Parameters
     ----------
     spec_df : pd.DataFrame
-    DataFrame of all spectra, as output from create_df_specs().
+        DataFrame of all spectra, as output from create_df_specs().
     mz_min, mz_max : float
-    Values of m/z between which the EIC is limited to.
+        Values of m/z between which the EIC is limited to.
 
     Returns
     -------
     eic : pd.Series
-    Extracted ion chromatogram, intensities indexed by chromatogram timestamp.
+        Extracted ion chromatogram, intensities indexed by chromatogram
+        timestamp.
     '''
     # assume all mass spectra in spec_array share same m/z index
     selected_range_mask = (spec_df.index>mz_min) & (spec_df.index<mz_max)
@@ -409,23 +414,23 @@ def detect_peak_heights(eic, num_peaks=1, make_plot=True, ax=None):
     Parameters
     ----------
     eic : pd.Series
-    Chromatogram of intensities indexed by timestamps, as output by
-    extract_eic().
+        Chromatogram of intensities indexed by timestamps, as output by
+        extract_eic().
     num_peaks : float
-    Number of peaks to extract, starting with largest. Returned peaks are kept
-    in chromatogram order (i.e., largest peak not necessarily returned first).
-    If None, all peaks are returned.
+        Number of peaks to extract, starting with largest. Returned peaks are
+        kept in chromatogram order (i.e., largest peak not necessarily returned
+        first).  If None, all peaks are returned.
     make_plot : Boolean
-    Whether to make a diagnostic plot showing the peaks, heights, and bases.
+        Whether to make a diagnostic plot showing the peaks, heights, and bases.
     ax : matplotlib.Axis
-    Axis to plot on. If None, make new axis.
+        Axis to plot on. If None, make new axis.
 
     Returns
     -------
     df_heights : pd.DataFrame
-    DataFrame with each entry containing the peak height, along with its
-    timestamp and the left and right bases to which the prominences are
-    measured.
+        DataFrame with each entry containing the peak height, along with its
+        timestamp and the left and right bases to which the prominences are
+        measured.
     '''
     peak_idxs, _ = sps.find_peaks(eic)
 
@@ -477,22 +482,24 @@ def integrate_area(int_region, bl_function=None, leftedge=None, rightedge=None,
     Parameters
     ----------
     int_region : pd.Series
-    Series of intensities, with index values of chromatogram time.
+        Series of intensities, with index values of chromatogram time.
     bl_function : function
-    Function that returns baseline intensity as a function of chromatogram
-    time. If provided, baseline is subtracted before integration is performed.
+        Function that returns baseline intensity as a function of chromatogram
+        time. If provided, baseline is subtracted before integration is
+        performed.
     leftedge, rightedge : float
-    Chromatogram times over which to integrate, if provided, defined as
-    (leftedge, rightedge].
+        Chromatogram times over which to integrate, if provided, defined as
+        (leftedge, rightedge].
     make_plot : Boolean
-    Make plot for visual check. Only helpful if baseline and/or edges defined.
+        Make plot for visual check. Only helpful if baseline and/or edges
+        defined.
     ax : matplotlib.Axis
-    Axis to plot on. If None, create new axis.
+        Axis to plot on. If None, create new axis.
 
     Returns
     -------
     integral : float
-    Integral of region.
+        Integral of region.
 
     Integral is calculated using Scipy implementation of composite trapezoidal
     rule.
@@ -537,14 +544,14 @@ def calc_linear_baseline(eic, leftbase, rightbase):
     Parameters
     ----------
     eic : pd.Series
-    Extracted ion chromatogram, intensities indexed by timestamp.
+        Extracted ion chromatogram, intensities indexed by timestamp.
     leftbase, rightbase : float
-    Timestamps of the start and end of the linear baseline.
+        Timestamps of the start and end of the linear baseline.
 
     Returns
     -------
     baseline : function
-    Linear function giving baseline intensity as a function of time.
+        Linear function giving baseline intensity as a function of time.
     '''
     x1, y1 = leftbase, eic.loc[leftbase]
     x2, y2 = rightbase, eic.loc[rightbase]
