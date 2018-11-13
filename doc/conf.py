@@ -43,6 +43,9 @@ extensions = [
     'sphinx.ext.napoleon',
 ]
 
+# mock import things that readthedocs can't handle
+autodoc_mock_imports = ["pyodbc"]
+
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
 
