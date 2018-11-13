@@ -40,7 +40,7 @@ release = '2018'
 # ones.
 extensions = [
     'sphinx.ext.autodoc',
-    'numpydoc',
+    'sphinx.ext.napoleon',
 ]
 
 # Add any paths that contain templates here, relative to this directory.
