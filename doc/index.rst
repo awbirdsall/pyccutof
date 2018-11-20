@@ -25,6 +25,7 @@ Example usage
 
 Given the FFC and FFT files, along with a previously determined calibration curve, create a pandas DataFrame containing all mass spectra in the FFT file, with m/z value as the index and mass spectrum timestamp as column name::
 
+    import numpy as np
     import pyccutof as pt
     
     FFC_FN = "MsData.FFC"

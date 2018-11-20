@@ -1,5 +1,7 @@
 # pyccutof
 
+[![Docs Status](https://readthedocs.org/projects/pyccutof/badge/?version=latest&style=flat-square)](https://pyccutof.readthedocs.io/en/latest/)
+
 Python package to work with mass spectrometry data files generated from a JEOL AccuTOF mass spectrometer.
 
 This code was developed for an academic research project and is in no way affiliated with or sponsored by JEOL. The included functions have been suitable for my purposes, but no guarantee is made of their more general applicability.
@@ -15,6 +17,7 @@ This code was developed for an academic research project and is in no way affili
 Given the FFC and FFT files, along with a previously determined calibration curve, create a DataFrame containing all mass spectra in the FFT file, with m/z value as the index and mass spectrum timestamp as column name:
 
 ```
+import numpy as np
 import pyccutof as pt
 
 FFC_FN = "MsData.FFC"
@@ -37,4 +40,4 @@ The DataFrame `df_specs` can then be further analyzed or saved to disk (e.g., `d
 
 ## Documentation
 
-Documentation is hosted at https://pyccutof.readthedocs.io and created with `sphinx`. This includes using docstrings written in `numpydocs` style.
+Documentation is hosted at https://pyccutof.readthedocs.io and created with `sphinx`. This includes using docstrings written in `numpydocs` style (<https://numpydoc.readthedocs.io/en/latest/format.html#docstring-standard>).
