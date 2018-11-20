@@ -16,7 +16,7 @@ This code was developed for an academic research project and is in no way affili
 
 Given the FFC and FFT files, along with a previously determined calibration curve, create a DataFrame containing all mass spectra in the FFT file, with m/z value as the index and mass spectrum timestamp as column name:
 
-```
+```python
 import numpy as np
 import pyccutof as pt
 
