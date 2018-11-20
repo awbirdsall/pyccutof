@@ -37,4 +37,4 @@ The DataFrame `df_specs` can then be further analyzed or saved to disk (e.g., `d
 
 ## Documentation
 
-Documentation is hosted at pyccutof.readthedocs.io and created with `sphinx`. This includes using docstrings written in `numpydocs` style.
+Documentation is hosted at https://pyccutof.readthedocs.io and created with `sphinx`. This includes using docstrings written in `numpydocs` style.

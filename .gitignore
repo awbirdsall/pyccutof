@@ -8,3 +8,5 @@
 src/pyccutof/f/
 doc/_build/
 *.py~
+*.rst~
+*.md~

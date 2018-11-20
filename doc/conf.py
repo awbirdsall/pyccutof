@@ -46,6 +46,11 @@ extensions = [
 # mock import things that readthedocs can't handle
 autodoc_mock_imports = ["pyodbc"]
 
+# by default include members without docstrings
+autodoc_default_options = {
+    'undoc-members': None
+}
+
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
 
@@ -71,7 +76,7 @@ language = None
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 
 # The name of the Pygments (syntax highlighting) style to use.
-pygments_style = None
+pygments_style = 'default'
 
 
 # -- Options for HTML output -------------------------------------------------
