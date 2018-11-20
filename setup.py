@@ -5,7 +5,7 @@ https://github.com/pypa/sampleproject
 """
 from setuptools import setup, find_packages
 from codecs import open
-from os import path
+from os import environ, path
 
 here = path.abspath(path.dirname(__file__))
 with open(path.join(here, 'README.md'), encoding='utf-8') as f:
@@ -15,7 +15,7 @@ exec(open('src/pyccutof/version.py').read())
 
 install_requires=['matplotlib>=1.5','numpy','pandas','scipy>=1.1'],
 # avoid trying (and failing) to install pyodbc in readthedocs
-on_rtd = os.environ.get('READTHEDOCS', None) == 'True'
+on_rtd = environ.get('READTHEDOCS', None) == 'True'
 if not on_rtd:
     install_requires.append('pyodbc')
 
