@@ -40,7 +40,7 @@ Given the FFC and FFT files, along with a previously determined calibration curv
     
     numpts, index_records = pt.readffc(FFC_FN)
     fft = pt.read_fft_lazy(FFT_FN, index_records)
-    mz = pt.apply_mz_cal(fft, calpoly)
+    mz = pt.apply_mz_cal(fft, cal_curve)
     df_specs = pt.create_df_specs(fft, mz)
 
 The DataFrame :code:`df_specs` can then be further analyzed or saved to disk (e.g., :code:`df_specs.to_csv()`, :code:`df_specs.to_pickle()`, ...).

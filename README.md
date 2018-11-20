@@ -32,7 +32,7 @@ cal_curve = np.poly1d([
 
 numpts, index_records = pt.readffc(FFC_FN)
 fft = pt.read_fft_lazy(FFT_FN, index_records)
-mz = pt.apply_mz_cal(fft, calpoly)
+mz = pt.apply_mz_cal(fft, cal_curve)
 df_specs = pt.create_df_specs(fft, mz)
 ```
 

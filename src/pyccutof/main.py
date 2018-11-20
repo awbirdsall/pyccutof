@@ -45,6 +45,39 @@ def readffc(fn):
     numpts = int(np.array([header]).view("int32"))
     return numpts, index_records
 
+def filter_index_recs_time(index_recs, time_center, time_window):
+    '''Filter FFC index records to those in a particular time window (in min).
+
+    Parameters
+    ----------
+    index_recs : numpy.recarray
+        recarray of index records located in FFT file, in format produced by `readffc()`.
+    time_center : float
+        Center of time region, in minutes, to restrict `index_recs` values to.
+    time_window : float
+        Width of time region, in minutes, to restrict `index_recs` values to.
+
+    Returns
+    -------
+    index_recs_filtered: numpy.recarray
+        Slice of input `index_recs`, limited to those entries for which the
+        spectrum time is within the defined window.
+
+    See Also
+    --------
+    readffc
+
+    Notes
+    -----
+    `timemultiplier` for the FFC time values is assume to be 2.5 ms, which is the case when the digital signal processor is not installed.
+    '''
+    # convert to minutes. assuming timemultiplier is 2.5 ms
+    time_min = index_recs['time']*2.5e-3/60
+    after_start = time_min > (time_center-0.5*time_window)
+    before_end = time_min < (time_center+0.5*time_window)
+    index_recs_filtered = index_recs[after_start & before_end]
+    return index_recs_filtered
+
 class ParserError(Exception):
     '''Raise exception when parser didn't work correctly.'''
     pass
@@ -501,6 +534,8 @@ def integrate_area(int_region, bl_function=None, leftedge=None, rightedge=None,
     integral : float
         Integral of region.
 
+    Notes
+    -----
     Integral is calculated using Scipy implementation of composite trapezoidal
     rule.
     '''
@@ -558,3 +593,85 @@ def calc_linear_baseline(eic, leftbase, rightbase):
     slope = (y2-y1)/(x2-x1)
     baseline = lambda x: slope*(x-x1) + y1
     return baseline
+
+def eic_peaks_from_raw(data_fldr, unit_mzs, calpoly, chrom_center=None,
+                       chrom_window=1, make_plot=False, ffc_fn='MsData.FFC',
+                       fft_fn='MsData.FFT'):
+    '''Calculate extracted ion chromatogram peak heights from raw data.
+
+    Convenience function. Assumes working with unit m/z resolution.
+
+    Parameters
+    ----------
+    data_fldr : str
+        Path to folder containing FFC and FFT data.
+    unit_mzs : list of floats
+        List of m/z from which to extract unit EICs (i.e., from -0.5 to +0.5
+        m/z of provided values).
+    calpoly : np.poly1d
+        Calibration curve to convert from TOF bin to m/z.
+    chrom_center : float or None, optional
+        Time, in minutes, within chromatogram for which peak window is defined.
+        If None, entire chromatogram is searched. Default None. Note if not
+        None, only a portion of the FFT file is ever read, which can
+        significantly reduce memory usage for a large FFT file.
+    chrom_window : float, optional
+        Time, in minutes, for width of peak window within chromatogram. Only
+        used if chrom_center is not None.
+    make_plot : bool, optional
+        Whether to make a plot showing each EIC and the detected peak. Default
+        False.
+    ffc_fn : str, optional
+        Name of FFC file in `data_fldr`. Default 'MsData.FFC', which is the
+        default output file name from the mass spec software.
+    fft_fn : str, optional
+        Name of FFT file in `data_fldr`. Default 'MsData.FFT', which is the
+        default output file name from the mass spec software.
+
+    Returns
+    -------
+    eic_peaks : dict
+        Dict of peak heights for each EIC. Each entry has format {'p###':
+        height}, where `###` is m/z value (not fixed number of digits) and
+        height is peak height (float).
+    '''
+    ffc_path = os.path.join(data_fldr,ffc_fn)
+    fft_path = os.path.join(data_fldr,fft_fn)
+
+    numpts, index_records = readffc(ffc_path)
+    if chrom_center is not None:
+        index_records = filter_index_recs_time(index_records, chrom_center,
+                                               chrom_window)
+
+    fft = read_fft_lazy(fft_path, index_recs=index_records)
+
+    mz = apply_mz_cal(fft, calpoly)
+
+    df_specs = create_df_specs(fft, mz)
+
+    if make_plot:
+        fig, axs = plt.subplots(len(unit_mzs), sharex=True,
+                                figsize=(7,2.4*len(unit_mzs)))
+        # force axs to always be list
+        if len(unit_mzs)==1:
+            axs = [axs]
+
+    eic_peaks = {} # dict of peak heights
+    # looping through each m/z
+    for i, unit_mz in enumerate(unit_mzs):
+        eic = extract_eic(df_specs, unit_mz-0.5, unit_mz+0.5)
+        kwargs = {'num_peaks': 1, 'make_plot': make_plot}
+        if make_plot:
+            kwargs.update({'ax': axs[i]})
+        df_peaks = detect_peak_heights(eic, **kwargs)
+        # extract dict of only heights (no bases or peak locations)
+        # assumes only getting 1 peak from detect_peak_heights()
+        height = df_peaks['height'].values[0]
+        if make_plot:
+            axs[i].set_title("{} m/z".format(unit_mz))
+        eic_peaks.update({"p{}".format(unit_mz): height})
+    if make_plot:
+        fig.suptitle(data_fldr)
+        fig.tight_layout()
+        fig.subplots_adjust(top=0.9)
+    return eic_peaks
