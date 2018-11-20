@@ -37,8 +37,11 @@ setup(
     keywords=['mass spectometry', 'chemistry'],
     package_dir = {'': 'src'},
     packages=['pyccutof'],
-    install_requires=['matplotlib>=1.5','numpy','pandas','pyodbc',
-                      'scipy>=1.1'],
+    install_requires=['matplotlib>=1.5','numpy','pandas','scipy>=1.1'],
+    # avoid trying (and failing) to install pyodbc in readthedocs
+    on_rtd = os.environ.get('READTHEDOCS', None) == 'True'
+    if not on_rtd:
+        install_requires.append('pyodbc')
     package_data={
         'pyccutof': ['data/sample.FFC', 'data/sample.FFT']
     },
