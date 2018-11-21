@@ -631,9 +631,10 @@ def eic_peaks_from_raw(data_fldr, unit_mzs, calpoly, chrom_center=None,
     Returns
     -------
     eic_peaks : dict
-        Dict of peak heights for each EIC. Each entry has format {'p###':
-        height}, where `###` is m/z value (not fixed number of digits) and
-        height is peak height (float).
+        Dict of peak heights and optional figure for each EIC. Each peak height
+        entry has format {'p###': height}, where `###` is m/z value (not fixed
+        number of digits) and height is peak height (float). If `make_plot` is
+        True, the figure is the value with key "fig".
     '''
     ffc_path = os.path.join(data_fldr,ffc_fn)
     fft_path = os.path.join(data_fldr,fft_fn)
@@ -674,4 +675,5 @@ def eic_peaks_from_raw(data_fldr, unit_mzs, calpoly, chrom_center=None,
         fig.suptitle(data_fldr)
         fig.tight_layout()
         fig.subplots_adjust(top=0.9)
+        eic_peaks.update({"fig": fig})
     return eic_peaks
