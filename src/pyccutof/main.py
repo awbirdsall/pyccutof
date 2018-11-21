@@ -594,6 +594,67 @@ def calc_linear_baseline(eic, leftbase, rightbase):
     baseline = lambda x: slope*(x-x1) + y1
     return baseline
 
+def eic_areas_from_raw(data_fldr, unit_mzs, calpoly, chrom_center=None,
+                       chrom_window=1, make_plot=False, ffc_fn='MsData.FFC',
+                       fft_fn='MsData.FFT'):
+    '''Calculate extracted ion chromatogram peak heights from raw data.
+
+    Convenience function. Assumes working with unit m/z resolution.
+
+    See Also
+    --------
+    eic_peaks_from_raw
+    '''
+    ffc_path = os.path.join(data_fldr,ffc_fn)
+    fft_path = os.path.join(data_fldr,fft_fn)
+
+    numpts, index_records = readffc(ffc_path)
+    if chrom_center is not None:
+        index_records = filter_index_recs_time(index_records, chrom_center,
+                                               chrom_window)
+
+    fft = read_fft_lazy(fft_path, index_recs=index_records)
+
+    mz = apply_mz_cal(fft, calpoly)
+
+    df_specs = create_df_specs(fft, mz)
+
+    if make_plot:
+        fig, axs = plt.subplots(len(unit_mzs), sharex=True,
+                                figsize=(7,2.4*len(unit_mzs)))
+        # force axs to always be list
+        if len(unit_mzs)==1:
+            axs = [axs]
+
+    eic_areas = {} # dict of peak heights
+    # looping through each m/z
+    for i, unit_mz in enumerate(unit_mzs):
+        eic = extract_eic(df_specs, unit_mz-0.5, unit_mz+0.5)
+        df_peaks = detect_peak_heights(eic, num_peaks=1, make_plot=False)
+        # assume only one peak
+        bigpeak = df_peaks.iloc[0]
+
+        baseline = calc_linear_baseline(eic,
+                                           bigpeak.leftbase_time,
+                                           bigpeak.rightbase_time)
+        kwargs = {'make_plot': make_plot}
+        if make_plot:
+            kwargs.update({'ax': axs[i]})
+        area = integrate_area(eic,
+                          baseline,
+                          bigpeak.leftbase_time,
+                          bigpeak.rightbase_time,
+                          **kwargs)
+        if make_plot:
+            axs[i].set_title("{} m/z".format(unit_mz))
+        eic_areas.update({"p{}".format(unit_mz): area})
+    if make_plot:
+        fig.suptitle(data_fldr)
+        fig.tight_layout()
+        fig.subplots_adjust(top=0.9)
+        eic_areas.update({"fig": fig})
+    return eic_areas
+
 def eic_peaks_from_raw(data_fldr, unit_mzs, calpoly, chrom_center=None,
                        chrom_window=1, make_plot=False, ffc_fn='MsData.FFC',
                        fft_fn='MsData.FFT'):
