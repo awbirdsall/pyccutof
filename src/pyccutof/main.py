@@ -51,7 +51,8 @@ def filter_index_recs_time(index_recs, time_center, time_window):
     Parameters
     ----------
     index_recs : numpy.recarray
-        recarray of index records located in FFT file, in format produced by `readffc()`.
+        recarray of index records located in FFT file, in format produced by
+        `readffc()`.
     time_center : float
         Center of time region, in minutes, to restrict `index_recs` values to.
     time_window : float
@@ -69,7 +70,8 @@ def filter_index_recs_time(index_recs, time_center, time_window):
 
     Notes
     -----
-    `timemultiplier` for the FFC time values is assume to be 2.5 ms, which is the case when the digital signal processor is not installed.
+    `timemultiplier` for the FFC time values is assume to be 2.5 ms, which is
+    the case when the digital signal processor is not installed.
     '''
     # convert to minutes. assuming timemultiplier is 2.5 ms
     time_min = index_recs['time']*2.5e-3/60
@@ -439,6 +441,8 @@ def extract_eic(spec_df, mz_min, mz_max):
     # assume all mass spectra in spec_array share same m/z index
     selected_range_mask = (spec_df.index>mz_min) & (spec_df.index<mz_max)
     eic = spec_df[selected_range_mask].max(axis=0)
+    # coerce index to float
+    eic.index = eic.index.astype(float)
     return eic
 
 def detect_peak_heights(eic, num_peaks=1, make_plot=True, ax=None):
@@ -508,9 +512,13 @@ def detect_peak_heights(eic, num_peaks=1, make_plot=True, ax=None):
                                'rightbase_time': rightbase_ts})
     return df_heights
 
-def integrate_area(int_region, bl_function=None, leftedge=None, rightedge=None,
-                  make_plot=True, ax=None):
-    '''Integrate Series values, with optional baseline and/or index cutoff.
+def int_edges_from_baseline(int_region, bl_function, peak_time):
+    '''Define edges of integration region from crossings with baseline.
+
+    For left edge, use last crossing before the peak. For right edge, since
+    decay is slower, wait for two consecutive values below the baseline. If
+    that is never observed in int_region, use the first value before the
+    baseline. As a final fallback, use the end of int_region.
 
     Parameters
     ----------
@@ -518,15 +526,65 @@ def integrate_area(int_region, bl_function=None, leftedge=None, rightedge=None,
         Series of intensities, with index values of chromatogram time.
     bl_function : function
         Function that returns baseline intensity as a function of chromatogram
+        time.
+    peak_time : float
+        Time, in units of int_region index, where peak is located.
+
+    Returns
+    -------
+    (left_edge, right_edge) : tuple of floats
+        Chromatogram times, in units of int_region index, defining left and
+        right edge of peak integration region.
+
+    See Also
+    --------
+    integrate_area
+    '''
+    before_peak = int_region.loc[0:peak_time]
+    below_baseline_before = np.where(before_peak<bl_function(before_peak.index))[0]
+    if len(below_baseline_before)>0:
+        last_crossing_before_peak = below_baseline_before[-1]
+        left_edge = before_peak.index[last_crossing_before_peak]
+    else:
+        left_edge = before_peak.index[0]
+
+    after_peak = int_region.loc[peak_time:]
+    below_baseline_after = np.where(after_peak<bl_function(after_peak.index))[0]
+    if len(below_baseline_after)>0:
+        consecutive = np.diff(below_baseline_after)==1
+        # use first time there are two consecutive values below the baseline.
+        # if this never happens, uses the first time below the baseline
+        if consecutive.any():
+            first_twice_below_bl = below_baseline_after[:-1][consecutive][0]
+            right_edge = after_peak.index[first_twice_below_bl]
+        else:
+            last_time_below_bl = below_baseline_after[-1]
+            right_edge = after_peak.index[last_time_below_bl]
+    else:
+        # if the values never go below the baseline, use last time available
+        right_edge = after_peak.index[-1]
+
+    return left_edge, right_edge
+
+def integrate_area(int_region, bl_function=None, left_edge=None,
+                   right_edge=None, make_plot=True, ax=None):
+    '''Integrate Series values, with optional baseline and/or index cutoff.
+
+    Parameters
+    ----------
+    int_region : pd.Series
+        Series of intensities, with index values of chromatogram time.
+    bl_function : function or None
+        Function that returns baseline intensity as a function of chromatogram
         time. If provided, baseline is subtracted before integration is
         performed.
-    leftedge, rightedge : float
+    left_edge, right_edge : float or None
         Chromatogram times over which to integrate, if provided, defined as
-        (leftedge, rightedge].
+        (left_edge, right_edge]. If None, integrate over entire int_region.
     make_plot : Boolean
         Make plot for visual check. Only helpful if baseline and/or edges
         defined.
-    ax : matplotlib.Axis
+    ax : matplotlib.Axis or None
         Axis to plot on. If None, create new axis.
 
     Returns
@@ -534,16 +592,20 @@ def integrate_area(int_region, bl_function=None, leftedge=None, rightedge=None,
     integral : float
         Integral of region.
 
+    See Also
+    --------
+    int_edges_from_raw
+
     Notes
     -----
     Integral is calculated using Scipy implementation of composite trapezoidal
     rule.
     '''
     int_region_original = int_region.copy()
-    if leftedge is not None:
-        int_region = int_region[int_region.index>leftedge]
-    if rightedge is not None:
-        int_region = int_region[int_region.index<=rightedge]
+    if left_edge is not None:
+        int_region = int_region[int_region.index>left_edge]
+    if right_edge is not None:
+        int_region = int_region[int_region.index<=right_edge]
     if bl_function is not None:
         int_region = int_region - bl_function(int_region.index.values)
     integral = spi.trapz(y=int_region, x=int_region.index.values)
@@ -560,21 +622,65 @@ def integrate_area(int_region, bl_function=None, leftedge=None, rightedge=None,
             ax.plot(int_region_original.index,
                      bl_function(int_region_original.index.values),
                      label='baseline')
-        if leftedge is not None:
-            ax.plot(leftedge, int_region_original.loc[leftedge], 'o',
+        if left_edge is not None:
+            ax.plot(left_edge, int_region_original.loc[left_edge], 'o',
                      label='left edge')
-        if rightedge is not None:
-            ax.plot(rightedge, int_region_original.loc[rightedge], 'o',
+        if right_edge is not None:
+            ax.plot(right_edge, int_region_original.loc[right_edge], 'o',
                      label='right edge')
         ax.set_title('Check integration region')
         ax.legend(loc='best')
 
     return integral
 
-def calc_linear_baseline(eic, leftbase, rightbase):
-    '''Given EIC and two indices, extract baseline and start/end times.
+def calc_baseline_const_before(eic, peak_time, start_earlier=15, window=10):
+    '''Create constant baseline function from mean value in region before peak.
 
-    Helpful in going between detect_peak_heights() and integrate_area().
+    This is the baseline-finding algorithm used by eic_areas_from_raw(),
+    because it does not rely on the (often inaccurate) peak edges detected by
+    the scipy peak_prominences algorithm.
+
+    Parameters
+    ----------
+    eic : pd.Series
+        Extracted ion chromatogram, intensities indexed by timestamp.
+    peak_time : float
+        Time, in units of int_region index, where peak is located.
+    start_earlier : float
+        Time before peak_time, in units of eic index, at which baseline region
+        begins.
+    window : float
+        Length of time, in units of eic index, over which baseline region
+        extends. Must be smaller than start_earlier so that baseline region
+        doesn't include peak, other ValueError is raised.
+
+    Returns
+    -------
+    baseline : np.poly1d
+        Constant-output function giving baseline intensity as a function of time.
+
+    See Also
+    --------
+    eic_areas_from_raw
+    calc_baseline_fit_surround
+    calc_baseline_two_points
+    '''
+    if window>start_earlier:
+        ValueError("Baseline region includes peak. Window is too large \
+                   relative to offset before peak.")
+    fit_region = eic.loc[peak_time-start_earlier:peak_time-start_earlier+window]
+    const_baseline = fit_region.mean()
+    baseline = np.poly1d([const_baseline])
+    return baseline
+
+def calc_baseline_two_points(eic, leftbase, rightbase):
+    '''Define a linear baseline from two timestamps of a series of intensities.
+
+    This is one option for going between detect_peak_heights() and
+    integrate_area(), but note the left and right base detected by the scipy
+    peak_prominences algorithm (used in detect_peak_heights()) is often
+    inaccurate and will lead to a faulty baseline. calc_baseline_const_before()
+    is preferred.
 
     Parameters
     ----------
@@ -587,6 +693,11 @@ def calc_linear_baseline(eic, leftbase, rightbase):
     -------
     baseline : function
         Linear function giving baseline intensity as a function of time.
+
+    See Also
+    --------
+    calc_baseline_const_before
+    calc_baseline_fit_surround
     '''
     x1, y1 = leftbase, eic.loc[leftbase]
     x2, y2 = rightbase, eic.loc[rightbase]
@@ -594,15 +705,101 @@ def calc_linear_baseline(eic, leftbase, rightbase):
     baseline = lambda x: slope*(x-x1) + y1
     return baseline
 
-def eic_areas_from_raw(data_fldr, unit_mzs, calpoly, chrom_center=None,
-                       chrom_window=1, make_plot=False, ffc_fn='MsData.FFC',
-                       fft_fn='MsData.FFT'):
-    '''Calculate extracted ion chromatogram peak heights from raw data.
+def calc_baseline_fit_surround(eic, leftend, rightstart, leftwindow=60,
+                               rightwindow=60, fitorder=2):
+    '''Calculate baseline via linear fit to regions surrounding peak.
 
-    Convenience function. Assumes working with unit m/z resolution.
+    This is one option for going between detect_peak_heights() and
+    integrate_area(), but note the algorithm is sensitive to the accuracy of
+    the two base values. The base values detected by the scipy peak_prominences
+    algorithm (used in detect_peak_heights()) is often inaccurate and will lead
+    to a faulty baseline. For this reason, calc_baseline_const_before() is
+    preferred.
+
+    Parameters
+    ----------
+    eic : pd.Series
+        Extracted ion chromatogram, intensities indexed by timestamp.
+    leftend, rightstart : float
+        Timestamps defining the end of the baseline region preceding the peak
+        and the start of the baseline region following the peak, in the units
+        of the eic index.
+    leftwindow, rightwindow : float
+        Width of the baseline windows to fit to, before and after the peak, in
+        units of the eic index.
+    fitorder : int
+        Order of polynomial fit to use. Depending on size of window and
+        stability of baseline, order 1 or 2 is likely most appropriate to avoid
+        overfitting.
+
+    Returns
+    -------
+    baseline : np.poly1d
+        Polynomial function giving baseline intensity as a function of time.
 
     See Also
     --------
+    calc_baseline_const_before
+    calc_baseline_two_points
+    '''
+    before = eic.loc[leftend-leftwindow:leftend]
+    after = eic.loc[rightstart:rightstart+rightwindow]
+    baseline_combine = before.append(after)
+    baseline = np.poly1d(np.polyfit(baseline_combine.index, baseline_combine,
+                                    fitorder))
+    return baseline
+
+def eic_areas_from_raw(data_fldr, unit_mzs, calpoly, chrom_center=None,
+                       chrom_window=1, make_plot=False, ffc_fn='MsData.FFC',
+                       fft_fn='MsData.FFT', bl_kwargs={}):
+    '''Calculate extracted ion chromatogram peak areas from raw data.
+
+    Convenience function. Assumes working with unit m/z resolution. Uses
+    calc_baseline_const_before to define baseline and integrate_area to
+    integrate.
+
+    Parameters
+    ----------
+    data_fldr : str
+        Path to folder containing FFC and FFT data.
+    unit_mzs : list of floats
+        List of m/z from which to extract unit EICs (i.e., from -0.5 to +0.5
+        m/z of provided values).
+    calpoly : np.poly1d
+        Calibration curve to convert from TOF bin to m/z.
+    chrom_center : float or None, optional
+        Time, in minutes, within chromatogram for which peak window is defined.
+        If None, entire chromatogram is searched. Default None. Note if not
+        None, only a portion of the FFT file is ever read, which can
+        significantly reduce memory usage for a large FFT file.
+    chrom_window : float, optional
+        Time, in minutes, for width of peak window within chromatogram. Only
+        used if chrom_center is not None.
+    make_plot : bool, optional
+        Whether to make a plot showing each EIC and the detected peak. Default
+        False.
+    ffc_fn : str, optional
+        Name of FFC file in `data_fldr`. Default 'MsData.FFC', which is the
+        default output file name from the mass spec software.
+    fft_fn : str, optional
+        Name of FFT file in `data_fldr`. Default 'MsData.FFT', which is the
+        default output file name from the mass spec software.
+    bl_kwargs : dict, optional
+        Dict of keyword arguments that are passed to the baseline function,
+        calc_baseline_const_before(). If empty dict, will use default values.
+
+    Returns
+    -------
+    eic_areas : dict
+        Dict of peak heights and optional figure for each EIC. Each peak height
+        entry has format {'p###': area}, where `###` is m/z value (not fixed
+        number of digits) and area is peak area (float). If `make_plot` is
+        True, the figure is the value with key "fig".
+
+    See Also
+    --------
+    calc_baseline_const_before
+    integrate_area
     eic_peaks_from_raw
     '''
     ffc_path = os.path.join(data_fldr,ffc_fn)
@@ -630,21 +827,23 @@ def eic_areas_from_raw(data_fldr, unit_mzs, calpoly, chrom_center=None,
     # looping through each m/z
     for i, unit_mz in enumerate(unit_mzs):
         eic = extract_eic(df_specs, unit_mz-0.5, unit_mz+0.5)
+        # pick out only most intense peak
         df_peaks = detect_peak_heights(eic, num_peaks=1, make_plot=False)
-        # assume only one peak
         bigpeak = df_peaks.iloc[0]
 
-        baseline = calc_linear_baseline(eic,
-                                           bigpeak.leftbase_time,
-                                           bigpeak.rightbase_time)
-        kwargs = {'make_plot': make_plot}
+        # define baseline as mean value over region before peak
+        baseline = calc_baseline_const_before(eic, bigpeak.peak_time,
+                                              **bl_kwargs)
+        # define edges of integration region from crossings of that baseline
+        # before and after the peak
+        left_edge, right_edge = int_edges_from_baseline(eic, baseline,
+                                                        bigpeak.peak_time)
+
+        int_kwargs = {'make_plot': make_plot}
         if make_plot:
-            kwargs.update({'ax': axs[i]})
-        area = integrate_area(eic,
-                          baseline,
-                          bigpeak.leftbase_time,
-                          bigpeak.rightbase_time,
-                          **kwargs)
+            int_kwargs.update({'ax': axs[i]})
+        area = integrate_area(eic, baseline, left_edge, right_edge,
+                              **int_kwargs)
         if make_plot:
             axs[i].set_title("{} m/z".format(unit_mz))
         eic_areas.update({"p{}".format(unit_mz): area})

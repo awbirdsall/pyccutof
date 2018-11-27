@@ -11,7 +11,7 @@ Welcome to pyccutof's documentation!
 
    Home <self>
 
-pyccutof is a Python package for working with mass spectrometer data files.
+pyccutof is a Python package for working with JEOL AccuTOF mass spectrometer data files.
 
 The project repository is hosted `on Github <https://github.com/awbirdsall/pyccutof/>`_.
 
