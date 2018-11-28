@@ -445,7 +445,8 @@ def extract_eic(spec_df, mz_min, mz_max):
     eic.index = eic.index.astype(float)
     return eic
 
-def detect_peak_heights(eic, num_peaks=1, make_plot=True, ax=None):
+def detect_peak_heights(eic, num_peaks=1, use_flat_baseline=True, bl_kwargs={},
+                        make_plot=True, ax=None):
     '''Find a given number of largest peaks in a chromatogram.
 
     Parameters
@@ -457,6 +458,14 @@ def detect_peak_heights(eic, num_peaks=1, make_plot=True, ax=None):
         Number of peaks to extract, starting with largest. Returned peaks are
         kept in chromatogram order (i.e., largest peak not necessarily returned
         first).  If None, all peaks are returned.
+    use_flat_baseline : Boolean
+        Whether to calculate height from a flat baseline extracted from before
+        the peak, using calc_baseline_const_before. Otherwise, use peak
+        prominences from scipy.signal.peak_prominences(). Default True.
+    bl_kwargs : dict
+        Dict of arguments to pass to calc_baseline_const_before. Allowed keys
+        are 'start_earlier' and 'window'. Default empty. Only used if
+        use_flat_baseline is True.
     make_plot : Boolean
         Whether to make a diagnostic plot showing the peaks, heights, and bases.
     ax : matplotlib.Axis
@@ -471,21 +480,36 @@ def detect_peak_heights(eic, num_peaks=1, make_plot=True, ax=None):
     '''
     peak_idxs, _ = sps.find_peaks(eic)
 
-    prominences, leftbase_idxs, rightbase_idxs = sps.peak_prominences(eic, peak_idxs)
-
     if num_peaks is not None:
         # only keep num_peaks largest peaks. on use of argpartition, see
         # https://stackoverflow.com/a/23734295/4280216
-        largest_idxs = np.argpartition(prominences, -num_peaks)[-num_peaks:]
-        prominences = prominences[largest_idxs]
-        leftbase_idxs = leftbase_idxs[largest_idxs]
-        rightbase_idxs = rightbase_idxs[largest_idxs]
+        # assumes peak_prominences good enough for determining n largest peaks.
+        temp_prominences, _, _ = sps.peak_prominences(eic, peak_idxs)
+        largest_idxs = np.argpartition(temp_prominences, -num_peaks)[-num_peaks:]
         peak_idxs = peak_idxs[largest_idxs]
 
     # convert from numpy index to Series index (i.e., timestamps)
     peak_ts = eic.iloc[peak_idxs].index.values
-    leftbase_ts = eic.iloc[leftbase_idxs].index.values
-    rightbase_ts = eic.iloc[rightbase_idxs].index.values
+
+    if use_flat_baseline:
+        prominences = []
+        leftbase_ts = []
+        rightbase_ts = []
+        for peak_t in peak_ts:
+            # define baseline as mean value over region before peak
+            baseline = calc_baseline_const_before(eic, peak_t, **bl_kwargs)
+            # define edges of integration region from crossings of that
+            # baseline before and after the peak
+            leftbase_t, rightbase_t = int_edges_from_baseline(eic, baseline, peak_t)
+            prominence = eic[peak_t] - baseline(peak_t)
+            prominences.append(prominence)
+            leftbase_ts.append(leftbase_t)
+            rightbase_ts.append(rightbase_t)
+    else:
+        prominences, leftbase_idxs, rightbase_idxs = sps.peak_prominences(eic, peak_idxs)
+        # convert from numpy index to Series index (i.e., timestamps)
+        leftbase_ts = eic.iloc[leftbase_idxs].index.values
+        rightbase_ts = eic.iloc[rightbase_idxs].index.values
 
     if make_plot:
         if ax is None:
@@ -499,6 +523,9 @@ def detect_peak_heights(eic, num_peaks=1, make_plot=True, ax=None):
                  alpha=0.3, label='leftbases')
         ax.plot(rightbase_ts, eic.loc[rightbase_ts], "o",
                  alpha=0.3, label='rightbases')
+        if use_flat_baseline:
+            baseline_x = np.linspace(eic.index.min(), eic.index.max())
+            ax.plot(baseline_x, baseline(baseline_x), label='baseline')
         ax.vlines(x=peak_ts, ymin=contour_heights, ymax=peak_values,
                    label='heights')
         for height, x, y in zip(prominences, peak_ts, peak_values):
@@ -856,7 +883,7 @@ def eic_areas_from_raw(data_fldr, unit_mzs, calpoly, chrom_center=None,
 
 def eic_peaks_from_raw(data_fldr, unit_mzs, calpoly, chrom_center=None,
                        chrom_window=1, make_plot=False, ffc_fn='MsData.FFC',
-                       fft_fn='MsData.FFT'):
+                       fft_fn='MsData.FFT', bl_kwargs={}):
     '''Calculate extracted ion chromatogram peak heights from raw data.
 
     Convenience function. Assumes working with unit m/z resolution.
@@ -887,6 +914,9 @@ def eic_peaks_from_raw(data_fldr, unit_mzs, calpoly, chrom_center=None,
     fft_fn : str, optional
         Name of FFT file in `data_fldr`. Default 'MsData.FFT', which is the
         default output file name from the mass spec software.
+    bl_kwargs : dict, optional
+        Dict of keyword arguments that are passed to the baseline function,
+        calc_baseline_const_before(). If empty dict, will use default values.
 
     Returns
     -------
@@ -924,10 +954,13 @@ def eic_peaks_from_raw(data_fldr, unit_mzs, calpoly, chrom_center=None,
         kwargs = {'num_peaks': 1, 'make_plot': make_plot}
         if make_plot:
             kwargs.update({'ax': axs[i]})
-        df_peaks = detect_peak_heights(eic, **kwargs)
+        df_peaks = detect_peak_heights(eic, use_flat_baseline=True,
+                                       bl_kwargs=bl_kwargs, **kwargs)
+
         # extract dict of only heights (no bases or peak locations)
         # assumes only getting 1 peak from detect_peak_heights()
         height = df_peaks['height'].values[0]
+
         if make_plot:
             axs[i].set_title("{} m/z".format(unit_mz))
         eic_peaks.update({"p{}".format(unit_mz): height})
